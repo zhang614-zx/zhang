@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="c4d3691f-88ae-413e-94b5-a6c346302ee1" name="更改" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/TumorDatasets.py" root0="SKIP_INSPECTION" />
+    <setting file="file://$PROJECT_DIR$/TumorTraining.py" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/model_evel.py" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/prep_seg_cache.py" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/segmentTraining.py" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/training.py" root0="FORCE_HIGHLIGHTING" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 4
+}</component>
+  <component name="ProjectId" id="2z1au55TCPh5Vqm6kZVFfW8YhM0" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python.1.executor": "Run",
+    "Python.TumorPrepCache.executor": "Run",
+    "Python.TumorTraining.executor": "Run",
+    "Python.api_backend.executor": "Run",
+    "Python.app.executor": "Run",
+    "Python.clearcache.executor": "Run",
+    "Python.disk.executor": "Run",
+    "Python.dsets.executor": "Run",
+    "Python.model.executor": "Run",
+    "Python.model_evel.executor": "Run",
+    "Python.prep_seg_cache.executor": "Run",
+    "Python.prepcache.executor": "Run",
+    "Python.segmentDsets.executor": "Run",
+    "Python.segmentTraining.executor": "Run",
+    "Python.test.executor": "Run",
+    "Python.test_ready.executor": "Run",
+    "Python.test_upload.executor": "Run",
+    "Python.training.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "last_opened_file_path": "G:/health/data-unversioned/seg/models/seg",
+    "settings.editor.selected.configurable": "preferences.lookFeel"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="G:\health\data-unversioned\seg\models\seg" />
+      <recent name="G:\health" />
+      <recent name="G:\health\runs\tumor_cls" />
+      <recent name="G:\health\util" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="G:\health\runs\tumor_cls\2025-07-01_ghy" />
+      <recent name="G:\health\util" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-98f27166c754-ba05f1cad1b1-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-242.21829.153" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="c4d3691f-88ae-413e-94b5-a6c346302ee1" name="更改" comment="" />
+      <created>1750901252489</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1750901252489</updated>
+    </task>
+    <servers />
+  </component>
+</project>
