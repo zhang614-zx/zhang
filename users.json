@@ -1,0 +1,17 @@
+[
+  {
+    "username": "20225823",
+    "password_hash": "scrypt:32768:8:1$zV6eXGX3jeB77Tg8$ec7acfdfa9ebc5a1821bc31e7af915314603d33769ed1d079d85960927750962c0b52f3860b14cb274b1365889b73a4a4b3c3496f6f26d8acb477c9eb24b44d8",
+    "register_time": "2025-07-04 09:23:56"
+  },
+  {
+    "username": "123",
+    "password_hash": "scrypt:32768:8:1$UbklhOgnUfbzIV59$a77deddd3d05f859198b2a32c27af19ee686fdac4915c95f444cb21c1f7268b1af744e0ac65cfdf9128e3886b1d62ccabf24f9f2c229f5c20cecbae5bfb0b8fc",
+    "register_time": "2025-07-17 21:30:15"
+  },
+  {
+    "username": "1111",
+    "password_hash": "scrypt:32768:8:1$twFzSp0CllsWrhxP$d33aa1c58ad71faaf2e1ae3d224f645afc53fc20b7841bce77852cad489a2a311ee9f0d46c4e697114ef6a42f46f37bc4a9736e404e82aa6ebd979d8be9d34e8",
+    "register_time": "2025-07-18 09:02:20"
+  }
+]
