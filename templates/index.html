@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AI辅助肺肿瘤预测系统</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+        .container { max-width: 700px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #ccc; padding: 32px; }
+        h1 { text-align: center; color: #2c3e50; }
+        .section { margin-bottom: 32px; }
+        label { font-weight: bold; }
+        .result, .chat-box { background: #f0f0f0; border-radius: 6px; padding: 16px; min-height: 60px; margin-top: 10px; }
+        .chat-history { max-height: 200px; overflow-y: auto; margin-bottom: 10px; }
+        .chat-message { margin-bottom: 8px; }
+        .chat-message.user { color: #2980b9; }
+        .chat-message.ai { color: #27ae60; }
+        button { background: #2980b9; color: #fff; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; }
+        button:disabled { background: #aaa; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>AI辅助肺肿瘤预测系统</h1>
+    <div class="section">
+        <form id="upload-form">
+            <label>上传CT影像文件（.mhd/.raw/.nii/.nii.gz/.dcm）：</label><br>
+            <input type="file" id="ctfile" name="file" multiple required>
+            <button type="submit">上传并分析</button>
+        </form>
+        <div class="result" id="result-box">请上传CT影像，系统将自动分析。</div>
+    </div>
+    <div class="section">
+        <label>AI助手（通义千问）：</label>
+        <div class="chat-box">
+            <div class="chat-history" id="chat-history"></div>
+            <form id="chat-form" style="display:flex;gap:8px;">
+                <input type="text" id="chat-input" placeholder="请输入您的问题..." style="flex:1;">
+                <button type="submit">发送</button>
+            </form>
+        </div>
+    </div>
+    <div style="text-align:right;margin-bottom:10px;">
+        <button id="history-btn" type="button">历史记录</button>
+    </div>
+    <div id="history-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.25);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:#fff;max-width:700px;width:90vw;max-height:90vh;overflow:auto;border-radius:8px;box-shadow:0 2px 16px #888;padding:24px;position:relative;">
+            <button id="close-history" style="position:absolute;top:10px;right:16px;font-size:18px;">×</button>
+            <h2 style="margin-top:0;">历史病例记录</h2>
+            <div id="history-list">加载中...</div>
+            <div id="history-detail" style="margin-top:24px;"></div>
+        </div>
+    </div>
+</div>
+<script>
+const uploadForm = document.getElementById('upload-form');
+const resultBox = document.getElementById('result-box');
+let lastUploadPath = '';
+
+uploadForm.onsubmit = async function(e) {
+    e.preventDefault();
+    const fileInput = document.getElementById('ctfile');
+    if (!fileInput.files.length) return;
+    resultBox.textContent = '正在上传并分析，请稍候...';
+    const formData = new FormData();
+    for (let i = 0; i < fileInput.files.length; i++) {
+        formData.append('file', fileInput.files[i]);
+    }
+    try {
+        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+        const uploadData = await uploadRes.json();
+        if (uploadData.error) throw new Error(uploadData.error);
+        lastUploadPath = uploadData.path;
+        // 调用预测
+        const predictRes = await fetch('/api/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: lastUploadPath })
+        });
+        const predictData = await predictRes.json();
+        if (predictData.error) throw new Error(predictData.error);
+        const r = predictData.result;
+        resultBox.innerHTML = `<b>分割结果：</b>${r.segmentation}<br><b>结节类型：</b>${r.nodule_type}<br><b>良恶性预测：</b>${r.malignancy}`;
+        if (r.vis_mask_list && r.vis_mask_list.length > 0) {
+            let rels = r.vis_mask_list.map(p => p.replace(/^uploads[\\\/]/, ''));
+            const img = document.createElement('img');
+            img.src = '/vis/' + rels[0];
+            img.alt = '分割可视化';
+            img.style = 'display:block;max-width:100%;margin-top:16px;border-radius:6px;box-shadow:0 2px 8px #ccc;';
+            resultBox.appendChild(img);
+            // 滑动条
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = 0;
+            slider.max = rels.length - 1;
+            slider.value = 0;
+            slider.style = 'width:100%;margin-top:8px;';
+            resultBox.appendChild(slider);
+            const sliceInfo = document.createElement('div');
+            sliceInfo.style = 'text-align:center;color:#888;font-size:13px;margin-bottom:8px;';
+            sliceInfo.textContent = `切片: 1 / ${rels.length}`;
+            resultBox.appendChild(sliceInfo);
+            slider.oninput = function() {
+                img.src = '/vis/' + rels[slider.value];
+                sliceInfo.textContent = `切片: ${parseInt(slider.value)+1} / ${rels.length}`;
+            };
+        }
+    } catch (err) {
+        resultBox.textContent = '错误：' + err.message;
+    }
+};
+
+// 聊天机器人
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const chatHistory = document.getElementById('chat-history');
+
+chatForm.onsubmit = async function(e) {
+    e.preventDefault();
+    const question = chatInput.value.trim();
+    if (!question) return;
+    appendChat('user', question);
+    chatInput.value = '';
+    appendChat('ai', '思考中...');
+    try {
+        const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question })
+        });
+        const data = await res.json();
+        chatHistory.lastElementChild.textContent = data.answer || ('错误：' + (data.error || '未知错误'));
+    } catch (err) {
+        chatHistory.lastElementChild.textContent = '错误：' + err.message;
+    }
+};
+
+function appendChat(role, text) {
+    const div = document.createElement('div');
+    div.className = 'chat-message ' + role;
+    div.textContent = (role === 'user' ? '医生：' : 'AI：') + text;
+    chatHistory.appendChild(div);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+const historyBtn = document.getElementById('history-btn');
+const historyModal = document.getElementById('history-modal');
+const closeHistory = document.getElementById('close-history');
+const historyList = document.getElementById('history-list');
+const historyDetail = document.getElementById('history-detail');
+
+historyBtn.onclick = async function() {
+    historyModal.style.display = 'flex';
+    historyDetail.innerHTML = '';
+    historyList.innerHTML = '加载中...';
+    try {
+        const res = await fetch('/api/history/list');
+        const data = await res.json();
+        if (!data.history.length) {
+            historyList.innerHTML = '<div style="color:#888;">暂无历史病例</div>';
+            return;
+        }
+        historyList.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:15px;">' +
+            '<tr style="background:#f7f7f7;"><th style="padding:6px 4px;">文件名</th><th>分析时间</th><th>分割结果</th><th></th></tr>' +
+            data.history.map(r =>
+                `<tr><td style="padding:6px 4px;">${r.filename}</td><td>${r.time}</td><td>${r.segmentation}</td><td><button data-id="${r.id}" class="view-detail">查看</button></td></tr>`
+            ).join('') + '</table>';
+        // 绑定查看按钮
+        document.querySelectorAll('.view-detail').forEach(btn => {
+            btn.onclick = async function() {
+                const id = btn.getAttribute('data-id');
+                historyDetail.innerHTML = '加载中...';
+                const res = await fetch('/api/history/detail?id=' + id);
+                const data = await res.json();
+                if (data.error) {
+                    historyDetail.innerHTML = '<span style="color:red;">' + data.error + '</span>';
+                    return;
+                }
+                const r = data.record;
+                let rels = [];
+                let html = `<b>分析时间：</b>${r.time}<br><b>文件名：</b>${r.filename}<br><b>分割结果：</b>${r.result.segmentation}<br><b>结节类型：</b>${r.result.nodule_type}<br><b>良恶性预测：</b>${r.result.malignancy}`;
+                if (r.result.vis_mask_list && r.result.vis_mask_list.length > 0) {
+                    rels = r.result.vis_mask_list.map(p => p.replace(/^uploads[\\\/]/, ''));
+                    html += '<div style="margin-top:12px;"><img id="history-img" src="/vis/' + rels[0] + '" style="max-width:100%;border-radius:6px;box-shadow:0 2px 8px #ccc;"></div>';
+                    if (rels.length > 1) {
+                        html += `<input id="history-slider" type="range" min="0" max="${rels.length-1}" value="0" style="width:100%;margin-top:8px;">`;
+                        html += `<div id="history-slice-info" style="text-align:center;color:#888;font-size:13px;margin-bottom:8px;">切片: 1 / ${rels.length}</div>`;
+                    }
+                }
+                historyDetail.innerHTML = html;
+                // 滑动条切换
+                const slider = document.getElementById('history-slider');
+                const img = document.getElementById('history-img');
+                const info = document.getElementById('history-slice-info');
+                if (slider && img && info) {
+                    slider.oninput = function() {
+                        img.src = '/vis/' + rels[slider.value];
+                        info.textContent = `切片: ${parseInt(slider.value)+1} / ${rels.length}`;
+                    };
+                }
+            };
+        });
+    } catch (err) {
+        historyList.innerHTML = '<span style="color:red;">加载失败：' + err.message + '</span>';
+    }
+};
+closeHistory.onclick = function() {
+    historyModal.style.display = 'none';
+};
+</script>
+</body>
+</html> 

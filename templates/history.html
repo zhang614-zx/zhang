@@ -1,0 +1,368 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2 style="color:#1976D2;font-weight:bold;">历史记录</h2>
+<div class="mb-4" style="background:#F5F5F5;border-radius:8px;padding:24px 18px;">
+    <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center;">
+        <input id="search-input" class="form-control" style="max-width:220px;" placeholder="按姓名/住院号搜索...">
+    </div>
+    <div id="history-list">加载中...</div>
+    <div id="pagination" style="margin-top:16px;text-align:center;display:none;">
+        <button id="prev-page" class="btn btn-outline-primary btn-sm" style="margin-right:8px;">上一页</button>
+        <span id="page-info" style="margin:0 12px;color:#666;"></span>
+        <button id="next-page" class="btn btn-outline-primary btn-sm" style="margin-left:8px;">下一页</button>
+    </div>
+    <div id="history-detail" style="margin-top:24px;"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const historyList = document.getElementById('history-list');
+const historyDetail = document.getElementById('history-detail');
+const searchInput = document.getElementById('search-input');
+const pagination = document.getElementById('pagination');
+const prevPage = document.getElementById('prev-page');
+const nextPage = document.getElementById('next-page');
+const pageInfo = document.getElementById('page-info');
+
+let allHistory = [];
+let currentPage = 1;
+const pageSize = 10;
+let filteredHistory = [];
+
+async function loadHistory() {
+    historyDetail.innerHTML = '';
+    historyList.innerHTML = '加载中...';
+    pagination.style.display = 'none';
+    try {
+        const res = await fetch('/api/history/list');
+        const data = await res.json();
+        allHistory = data.history || [];
+        filteredHistory = allHistory;
+        currentPage = 1;
+        renderHistory();
+    } catch (err) {
+        historyList.innerHTML = '<span style="color:red;">加载失败：' + err.message + '</span>';
+    }
+}
+
+function renderHistory() {
+    if (!filteredHistory.length) {
+        historyList.innerHTML = '<div style="color:#888;">暂无历史病例</div>';
+        pagination.style.display = 'none';
+        return;
+    }
+
+    // 计算分页
+    const totalPages = Math.ceil(filteredHistory.length / pageSize);
+    const startIndex = (currentPage - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    const currentPageData = filteredHistory.slice(startIndex, endIndex);
+
+    // 渲染表格（移除分割结果列）
+    historyList.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:15px;">' +
+        '<tr style="background:#e3f2fd;"><th style="padding:6px 4px;">姓名</th><th>性别</th><th>年龄</th><th>住院号</th><th>文件名</th><th>分析时间</th><th></th><th></th></tr>' +
+        currentPageData.map(r => {
+            const p = r.patient_info || {};
+            return `<tr><td>${p.name||''}</td><td>${p.gender||''}</td><td>${p.age||''}</td><td>${p.patient_id||''}</td><td style="padding:6px 4px;">${r.filename}</td><td>${r.time}</td><td><button data-id="${r.id}" class="view-detail btn btn-sm btn-outline-primary">查看</button></td><td><button data-id="${r.id}" class="delete-history btn btn-sm btn-outline-danger">删除</button></td></tr>`
+        }).join('') + '</table>';
+
+    // 更新分页控件
+    if (totalPages > 1) {
+        pagination.style.display = 'block';
+        pageInfo.textContent = `第 ${currentPage} 页，共 ${totalPages} 页（共 ${filteredHistory.length} 条记录）`;
+        prevPage.disabled = currentPage <= 1;
+        nextPage.disabled = currentPage >= totalPages;
+    } else {
+        pagination.style.display = 'none';
+    }
+
+    // 绑定查看按钮
+    document.querySelectorAll('.view-detail').forEach(btn => {
+        btn.onclick = async function() {
+            const id = btn.getAttribute('data-id');
+            historyDetail.innerHTML = '加载中...';
+            const res = await fetch('/api/history/detail?id=' + id);
+            const data = await res.json();
+            if (data.error) {
+                historyDetail.innerHTML = '<span style="color:red;">' + data.error + '</span>';
+                return;
+            }
+            const r = data.record;
+            const p = r.patient_info || {};
+            let rels = [];
+            let html = `<br><b>姓名：</b>${p.name||''} <b>性别：</b>${p.gender||''} <b>年龄：</b>${p.age||''} <b>住院号：</b>${p.patient_id||''}<br>`;
+            html += `<b>分析时间：</b>${r.time}<br><b>文件名：</b>${r.filename}<br>`;
+            let noduleSummary = (r.result && r.result.nodule_summary) || {};
+            let malignancySummary = (r.result && r.result.malignancy_summary) || {};
+            let totalNodules = noduleSummary.total || 0;
+            let highProbNodules = noduleSummary.high_prob_nodule_count || 0;
+            
+            // 重新计算各种状态的数量
+            let benignNodules = 0;  // 结节数（结节概率≥50%且恶性概率<50%）
+            let malignantTumors = 0;  // 恶性肿瘤数（结节概率≥50%且恶性概率≥50%）
+            let needFurtherDiagnosis = 0;  // 需进一步诊断数（结节概率<50%且恶性概率≥50%）
+            
+            if (r.result.nodule_results && r.result.nodule_results.length > 0) {
+                const noduleThreshold = r.result.nodule_summary?.threshold || 0.5;
+                const malignantThreshold = r.result.malignancy_summary?.threshold || 0.5;
+                
+                const highProbNodules = r.result.nodule_results.filter(nodule => 
+                    nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+                );
+                
+                highProbNodules.forEach(nodule => {
+                    if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                        benignNodules++;
+                    } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                        malignantTumors++;
+                    } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                        needFurtherDiagnosis++;
+                    }
+                });
+            }
+            
+            // 修改分割结果显示
+            const segmentationText = r.result.segmentation.replace(/检测到(\d+)个结节/, '检测到$1个疑似结节');
+            html += `<b>分割结果：</b>${segmentationText}<br>`;
+            html += `<span style='color:#1976D2;font-weight:bold;'>结节数：${benignNodules}</span><br>`;
+            html += `<span style='color:#e53935;font-weight:bold;'>恶性肿瘤数：${malignantTumors}</span><br>`;
+            html += `<span style='color:#4caf50;font-weight:bold;'>需进一步诊断数：${needFurtherDiagnosis}</span><br>`;
+            if (r.result.ai_diagnosis) {
+                html += `<div style='margin-top:18px;padding:16px 18px;background:#f5f7fa;border-radius:10px;box-shadow:0 2px 8px #1976d122;'><b style='color:#1976D2;'>AI诊断建议：</b><div id='ai-diagnosis-box-detail'></div></div>`;
+            }
+            
+            // 添加详细结节数据展示
+            if (r.result.nodule_results && r.result.nodule_results.length > 0) {
+                html += `
+                    <div style='margin-top:18px;padding:16px 18px;background:#f8f9fa;border-radius:10px;box-shadow:0 2px 8px #1976d122;'>
+                        <h4 style="color:#1976D2;margin-bottom:16px;">结节和恶性肿瘤详细数据</h4>
+                        <div style="max-height:300px;overflow-y:auto;position:relative;">
+                            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                                <thead style="position:sticky;top:0;z-index:10;background:#e3f2fd;">
+                                    <tr>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">编号</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">结节概率</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">恶性概率</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">切片位置</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">体素坐标</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">物理坐标(mm)</th>
+                                        <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="history-nodule-detail-table">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (r.result.vis_mask_list && r.result.vis_mask_list.length > 0) {
+                rels = r.result.vis_mask_list.map(p => p.replace(/^uploads[\\\/]/, ''));
+                html += '<div style="margin-top:12px;"><img id="history-img" src="/vis/' + rels[0] + '" style="max-width:320px;max-height:320px;border-radius:6px;box-shadow:0 2px 8px #ccc;"></div>';
+                if (rels.length > 1) {
+                    html += `<input id="history-slider" type="range" min="0" max="${rels.length-1}" value="0" style="width:320px;margin-top:8px;">`;
+                    html += `<div id="history-slice-info" style="width:320px;text-align:center;color:#888;font-size:13px;margin-bottom:8px;">切片: 1 / ${rels.length}</div>`;
+                }
+            }
+            historyDetail.innerHTML = html;
+            
+            // 填充详细结节数据表格
+            if (r.result.nodule_results && r.result.nodule_results.length > 0) {
+                const tableBody = document.getElementById('history-nodule-detail-table');
+                const noduleThreshold = r.result.nodule_summary?.threshold || 0.5;
+                const malignantThreshold = r.result.malignancy_summary?.threshold || 0.5;
+                
+                // 只显示高概率结节和恶性肿瘤
+                const highProbNodules = r.result.nodule_results.filter(nodule => 
+                    nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+                );
+                
+                highProbNodules.forEach((nodule, index) => {
+                    let status, statusColor, bgColor;
+                    
+                    // 修改状态判断逻辑
+                    if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                        status = '结节';
+                        statusColor = '#42a5f5';
+                        bgColor = '#fff3e0';
+                    } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                        status = '恶性肿瘤';
+                        statusColor = '#ef5350';
+                        bgColor = '#ffebee';
+                    } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                        status = '需进一步诊断';
+                        statusColor = '#4caf50';
+                        bgColor = '#e8f5e8';
+                    } else {
+                        status = '未知';
+                        statusColor = '#757575';
+                        bgColor = '#f5f5f5';
+                    }
+                    
+                    const row = document.createElement('tr');
+                    row.style = `background:${bgColor};`;
+                    row.innerHTML = `
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;font-weight:bold;">${index + 1}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${(nodule.prob_nodule * 100).toFixed(1)}%</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${(nodule.prob_malignant * 100).toFixed(1)}%</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_irc ? nodule.center_irc[0] + 1 : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_irc ? `[${nodule.center_irc.join(', ')}]` : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_xyz ? `[${nodule.center_xyz.map(x => x.toFixed(1)).join(', ')}]` : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;color:${statusColor};font-weight:bold;">${status}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            }
+            
+            // 滑动条切换
+            const slider = document.getElementById('history-slider');
+            const img = document.getElementById('history-img');
+            const info = document.getElementById('history-slice-info');
+            if (slider && img && info) {
+                slider.oninput = function() {
+                    img.src = '/vis/' + rels[slider.value];
+                    info.textContent = `切片: ${parseInt(slider.value)+1} / ${rels.length}`;
+                };
+            }
+            if (r.result.ai_diagnosis) {
+                document.getElementById('ai-diagnosis-box-detail').innerText = r.result.ai_diagnosis || '';
+            }
+            // 恢复导出PDF和预览报告按钮
+            if (document.getElementById('export-report-btn')) {
+                document.getElementById('export-report-btn').remove();
+            }
+            const exportBtn = document.createElement('button');
+            exportBtn.id = 'export-report-btn';
+            exportBtn.className = 'btn btn-success';
+            exportBtn.style = 'margin-top:18px;margin-bottom:8px;margin-right:12px;';
+            exportBtn.innerHTML = '<i class="fa fa-file-pdf-o"></i> 导出PDF报告';
+            historyDetail.prepend(exportBtn);
+            exportBtn.onclick = function() {
+                exportBtn.disabled = true;
+                exportBtn.innerText = '导出中...';
+                fetch('/api/report/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: r.id })
+                })
+                .then(res => {
+                    if (!res.ok) throw new Error('导出失败，状态码：' + res.status);
+                    return res.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = '分析报告.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        window.URL.revokeObjectURL(url);
+                        a.remove();
+                    }, 100);
+                    exportBtn.disabled = false;
+                    exportBtn.innerHTML = '<i class="fa fa-file-pdf-o"></i> 导出PDF报告';
+                })
+                .catch(err => {
+                    alert('导出失败: ' + err.message + '。如多次失败请检查浏览器下载设置或联系管理员。');
+                    exportBtn.disabled = false;
+                    exportBtn.innerHTML = '<i class="fa fa-file-pdf-o"></i> 导出PDF报告';
+                });
+            };
+            if (document.getElementById('preview-report-btn')) {
+                document.getElementById('preview-report-btn').remove();
+            }
+            const previewBtn = document.createElement('button');
+            previewBtn.id = 'preview-report-btn';
+            previewBtn.className = 'btn btn-outline-info';
+            previewBtn.style = 'margin-top:18px;margin-bottom:8px;margin-right:12px;';
+            previewBtn.innerHTML = '<i class="fa fa-eye"></i> 预览报告';
+            historyDetail.prepend(previewBtn);
+            previewBtn.onclick = function() {
+                previewBtn.disabled = true;
+                previewBtn.innerText = '加载中...';
+                fetch('/api/report/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: r.id })
+                })
+                .then(res => res.text())
+                .then(html => {
+                    previewBtn.disabled = false;
+                    previewBtn.innerHTML = '<i class="fa fa-eye"></i> 预览报告';
+                    const win = window.open('', '_blank');
+                    win.document.write(html);
+                    win.document.close();
+                })
+                .catch(err => {
+                    alert('预览失败: ' + err.message);
+                    previewBtn.disabled = false;
+                    previewBtn.innerHTML = '<i class="fa fa-eye"></i> 预览报告';
+                });
+            };
+        };
+    });
+    // 绑定删除按钮
+    document.querySelectorAll('.delete-history').forEach(btn => {
+        btn.onclick = async function() {
+            if (!confirm('确定要删除该条历史记录吗？')) return;
+            const id = btn.getAttribute('data-id');
+            btn.disabled = true;
+            btn.textContent = '删除中...';
+            try {
+                const res = await fetch('/api/history/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    loadHistory();
+                } else {
+                    alert('删除失败：' + (data.error || '未知错误'));
+                    btn.disabled = false;
+                    btn.textContent = '删除';
+                }
+            } catch (err) {
+                alert('网络错误：' + err.message);
+                btn.disabled = false;
+                btn.textContent = '删除';
+            }
+        };
+    });
+}
+
+// 分页事件处理
+prevPage.onclick = function() {
+    if (currentPage > 1) {
+        currentPage--;
+        renderHistory();
+    }
+};
+
+nextPage.onclick = function() {
+    const totalPages = Math.ceil(filteredHistory.length / pageSize);
+    if (currentPage < totalPages) {
+        currentPage++;
+        renderHistory();
+    }
+};
+
+searchInput.oninput = function() {
+    const kw = this.value.trim();
+    if (!kw) {
+        filteredHistory = allHistory;
+    } else {
+        filteredHistory = allHistory.filter(r => {
+            const p = r.patient_info || {};
+            return (p.name && p.name.includes(kw)) || (p.patient_id && p.patient_id.includes(kw));
+        });
+    }
+    currentPage = 1; // 重置到第一页
+    renderHistory();
+};
+
+loadHistory();
+</script>
+{% endblock %}

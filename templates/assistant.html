@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="ds-chat-root">
+    <div class="ds-chat-header">
+        <div class="ds-chat-title">AI小助手</div>
+        <div class="ds-chat-subtitle">我可以帮你解读医学影像、分析病例、回答医学问题，也可以辅助写科研、查文献、写代码等~</div>
+    </div>
+    <div class="ds-chat-main">
+        <div class="ds-chat-history" id="chat-history"></div>
+        <form id="chat-form" class="ds-chat-form">
+            <input type="text" id="chat-input" placeholder="给 AI 小助手 发送消息" autocomplete="off">
+            <button type="button" class="ds-chat-attach" tabindex="-1" disabled><svg width="22" height="22" viewBox="0 0 24 24"><path d="M17.657 11.657l-5.657 5.657c-1.562 1.562-4.095 1.562-5.657 0-1.562-1.562-1.562-4.095 0-5.657l7.071-7.071c.781-.781 2.047-.781 2.828 0 .781.781.781 2.047 0 2.828l-7.071 7.071c-.391.391-1.023.391-1.414 0-.391-.391-.391-1.023 0-1.414l6.364-6.364" fill="none" stroke="#888" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <button type="submit" class="ds-chat-send"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M3 20l18-8-18-8v7l15 1-15 1z" fill="#fff"/></svg></button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+<style>
+.ds-chat-root {
+    width: 100%;
+    max-width: 1300px;
+    margin: 36px auto 0 auto;
+    background: #f8fafc;
+    border-radius: 24px;
+    box-shadow: 0 4px 32px #1976d111;
+    padding: 0 0 24px 0;
+    min-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.ds-chat-header {
+    width: 100%;
+    text-align: center;
+    padding: 38px 0 18px 0;
+}
+.ds-chat-title {
+    font-size: 2.1rem;
+    font-weight: bold;
+    color: #222;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+}
+.ds-chat-subtitle {
+    color: #666;
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+}
+.ds-chat-main {
+    width: 100%;
+    max-width: 1200px;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 2px 12px #1976d111;
+    padding: 0 0 16px 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+    margin: 0 auto;
+}
+.ds-chat-history {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 32px 12px 32px;
+    min-height: 320px;
+    max-height: 48vh;
+}
+.ds-chat-form {
+    display: flex;
+    align-items: center;
+    background: #f5f7fa;
+    border-radius: 18px;
+    box-shadow: 0 1.5px 8px #1976d111;
+    padding: 12px 18px 12px 18px;
+    margin: 0 18px;
+    position: relative;
+    bottom: 0;
+    gap: 8px;
+}
+.ds-chat-form input[type="text"] {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-size: 1.1rem;
+    color: #222;
+    outline: none;
+    padding: 8px 0;
+}
+.ds-chat-form input[type="text"]::placeholder {
+    color: #bbb;
+    font-size: 1.1rem;
+}
+.ds-chat-attach {
+    background: none;
+    border: none;
+    outline: none;
+    cursor: not-allowed;
+    padding: 0 6px;
+    opacity: 0.5;
+    border-radius: 50%;
+    transition: background 0.2s;
+}
+.ds-chat-send {
+    background: #1976d2;
+    border: none;
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+    box-shadow: 0 2px 8px #1976d122;
+}
+.ds-chat-send:hover {
+    background: #1565c0;
+}
+/* 聊天气泡 */
+.chat-message {
+    margin-bottom: 18px;
+    padding: 12px 18px;
+    border-radius: 14px;
+    line-height: 1.7;
+    max-width: 80%;
+    word-break: break-word;
+    font-size: 1.08rem;
+    box-shadow: 0 1.5px 8px #1976d111;
+}
+.chat-message.user {
+    background: #e3f2fd;
+    color: #1976d2;
+    margin-left: auto;
+    margin-right: 0;
+    text-align: right;
+}
+.chat-message.ai {
+    background: #f5f7fa;
+    color: #222;
+    margin-right: auto;
+    margin-left: 0;
+    text-align: left;
+}
+.chat-message.ai h1, .chat-message.ai h2, .chat-message.ai h3, 
+.chat-message.ai h4, .chat-message.ai h5, .chat-message.ai h6 {
+    color: #1976d2;
+    margin: 8px 0 4px 0;
+    font-weight: bold;
+}
+.chat-message.ai p {
+    margin: 4px 0;
+}
+.chat-message.ai ul, .chat-message.ai ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+.chat-message.ai li {
+    margin: 2px 0;
+}
+.chat-message.ai code {
+    background: #f0f0f0;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.98em;
+}
+.chat-message.ai pre {
+    background: #f8f9fa;
+    padding: 8px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 8px 0;
+}
+.chat-message.ai pre code {
+    background: none;
+    padding: 0;
+}
+.chat-message.ai blockquote {
+    border-left: 4px solid #1976d2;
+    margin: 8px 0;
+    padding-left: 12px;
+    color: #666;
+}
+.chat-message.ai strong {
+    font-weight: bold;
+    color: #1976d2;
+}
+.chat-message.ai em {
+    font-style: italic;
+}
+@media (max-width: 900px) {
+    .ds-chat-root, .ds-chat-main { max-width: 100vw; }
+    .ds-chat-header { padding: 18px 0 8px 0; }
+    .ds-chat-main { padding: 0 0 8px 0; }
+    .ds-chat-history { padding: 18px 6vw 8px 6vw; }
+    .ds-chat-form { margin: 0 2vw; }
+}
+</style>
+<script>
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const chatHistory = document.getElementById('chat-history');
+chatForm.onsubmit = async function(e) {
+    e.preventDefault();
+    const question = chatInput.value.trim();
+    if (!question) return;
+    appendChat('user', question);
+    chatInput.value = '';
+    appendChat('ai', '思考中...');
+    try {
+        const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question })
+        });
+        const data = await res.json();
+        const answer = data.answer || ('错误：' + (data.error || '未知错误'));
+        // 更新最后一条AI消息的内容
+        const lastMessage = chatHistory.lastElementChild;
+        if (lastMessage && lastMessage.classList.contains('ai')) {
+            lastMessage.innerHTML = marked.parse(answer);
+        }
+    } catch (err) {
+        const lastMessage = chatHistory.lastElementChild;
+        if (lastMessage && lastMessage.classList.contains('ai')) {
+            lastMessage.innerHTML = marked.parse('错误：' + err.message);
+        }
+    }
+};
+function appendChat(role, text) {
+    const div = document.createElement('div');
+    div.className = 'chat-message ' + role;
+    if (role === 'user') {
+        div.textContent = text;
+    } else {
+        div.innerHTML = marked.parse(text);
+    }
+    chatHistory.appendChild(div);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+</script>
+{% endblock %} 

@@ -1,0 +1,387 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2 style="color:#1976D2;font-weight:bold;">肿瘤预测与AI分析</h2>
+<div class="mb-4" style="background:#F5F5F5;border-radius:8px;padding:24px 18px;">
+    <div style="display: flex; align-items: flex-start; gap: 32px;">
+        <div style="flex: 1;">
+            <form id="upload-form">
+                <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;">
+                    <div><label class="form-label">姓名</label><input type="text" class="form-control" id="patient-name" name="patient_name" required style="min-width:120px;"></div>
+                    <div><label class="form-label">性别</label><select class="form-control" id="patient-gender" name="patient_gender" required style="min-width:80px;"><option value="">请选择</option><option value="男">男</option><option value="女">女</option></select></div>
+                    <div><label class="form-label">年龄</label><input type="number" class="form-control" id="patient-age" name="patient_age" min="0" max="120" required style="min-width:80px;"></div>
+                    <div><label class="form-label">住院号</label><input type="text" class="form-control" id="patient-id" name="patient_id" style="min-width:120px;"></div>
+                </div>
+                <label class="form-label" style="color:#1976D2;font-weight:500;">上传CT影像文件（.mhd +.raw）：</label><br>
+                <input type="file" id="ctfile" name="file" multiple required style="margin-bottom:10px;">
+                <button type="button" id="preview-btn" class="btn btn-secondary" style="margin-right:10px;">上传</button>
+                <button type="submit" id="analyze-btn" class="btn btn-primary" disabled>分析</button>
+            </form>
+            <div id="result-box" style="margin-top:24px;"></div>
+        </div>
+        <div id="image-box" style="min-width: 260px; max-width: 260px; text-align: center;"></div>
+    </div>
+    <div class="mt-3" id="preview-box">
+        <img id="preview-img" style="max-width:300px;display:none;margin-top:10px;border-radius:6px;box-shadow:0 2px 8px #ccc;">
+    </div>
+    <div class="mt-3" id="progress-bar-container" style="width:400px;height:24px;background:#eee;border-radius:8px;overflow:hidden;display:none;">
+      <div id="progress-bar" style="height:100%;width:1%;background:#1976D2;transition:width 0.3s;"></div>
+    </div>
+    <div id="progress-text" style="margin-top:8px;color:#1976D2;display:none;">准备中...</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+<script>
+const uploadForm = document.getElementById('upload-form');
+const resultBox = document.getElementById('result-box');
+const previewImg = document.getElementById('preview-img');
+const previewBox = document.getElementById('preview-box');
+const progressBar = document.getElementById('progress-bar');
+const progressBarContainer = document.getElementById('progress-bar-container');
+const progressText = document.getElementById('progress-text');
+const previewBtn = document.getElementById('preview-btn');
+const analyzeBtn = document.getElementById('analyze-btn');
+const fileInput = document.getElementById('ctfile');
+const imageBox = document.getElementById('image-box');
+let lastUploadPath = '';
+let lastFileId = '';
+let avgTimes = {seg: 10, nodule: 5, tumor: 5, ai: 2}; // 默认
+let stages = [];
+let progressTimer = null;
+let currentStage = 0;
+let currentPercent = 0;
+let progressBarFinishing = false;
+
+// 监听文件选择，上传后立即显示灰度图
+fileInput.onchange = async function() {
+    if (!fileInput.files.length) return;
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    try {
+        const res = await fetch('/api/preview', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.img) {
+            previewImg.src = data.img;
+            previewImg.style.display = 'block';
+        }
+    } catch (e) {
+        previewImg.style.display = 'none';
+    }
+};
+
+async function fetchProgressStats() {
+    try {
+        const res = await fetch('/api/progress_stats');
+        const data = await res.json();
+        avgTimes = data;
+        // 动态计算每段区间
+        let total = avgTimes.seg + avgTimes.nodule + avgTimes.tumor + avgTimes.ai;
+        let segLen = Math.round(avgTimes.seg / total * 100);
+        let noduleLen = Math.round(avgTimes.nodule / total * 100);
+        let tumorLen = Math.round(avgTimes.tumor / total * 100);
+        let aiLen = 100 - segLen - noduleLen - tumorLen; // 保证总和100
+        let segEnd = segLen;
+        let noduleEnd = segEnd + noduleLen;
+        let tumorEnd = noduleEnd + tumorLen;
+        let aiEnd = 100;
+        stages = [
+            {name: '语义分割', key: 'seg', start: 0, end: segEnd, duration: avgTimes.seg || 10},
+            {name: '结节检测', key: 'nodule', start: segEnd, end: noduleEnd, duration: avgTimes.nodule || 5},
+            {name: '肿瘤检测', key: 'tumor', start: noduleEnd, end: tumorEnd, duration: avgTimes.tumor || 5},
+            {name: 'AI分析', key: 'ai', start: tumorEnd, end: aiEnd, duration: avgTimes.ai || 2}
+        ];
+    } catch (e) {
+        // 默认区间
+        stages = [
+            {name: '语义分割', key: 'seg', start: 0, end: 40, duration: 10},
+            {name: '结节检测', key: 'nodule', start: 40, end: 70, duration: 5},
+            {name: '肿瘤检测', key: 'tumor', start: 70, end: 90, duration: 5},
+            {name: 'AI分析', key: 'ai', start: 90, end: 100, duration: 2}
+        ];
+    }
+}
+
+function startSmoothProgress() {
+    if (progressTimer) clearInterval(progressTimer);
+    progressBarFinishing = false;
+    currentStage = 0;
+    currentPercent = stages[0].start;
+    progressBar.style.width = currentPercent + '%';
+    progressBarContainer.style.display = '';
+    progressText.style.display = '';
+    runStage(0);
+}
+
+function runStage(stageIdx) {
+    if (stageIdx >= stages.length) {
+        progressBar.style.width = '100%';
+        progressText.textContent = '分析完成';
+        setTimeout(() => {
+            progressBarContainer.style.display = 'none';
+            progressText.style.display = 'none';
+        }, 1200);
+        return;
+    }
+    let stage = stages[stageIdx];
+    let step = (stage.end - stage.start) / (stage.duration * 10); // 每100ms推进
+    let localPercent = stage.start;
+    progressText.textContent = stage.name + '中...';
+    if (progressTimer) clearInterval(progressTimer);
+    progressTimer = setInterval(() => {
+        if (progressBarFinishing) return;
+        localPercent += step;
+        if (localPercent >= stage.end) {
+            localPercent = stage.end;
+            progressBar.style.width = localPercent + '%';
+            clearInterval(progressTimer);
+            runStage(stageIdx + 1);
+        } else {
+            progressBar.style.width = localPercent + '%';
+        }
+    }, 100);
+}
+
+function finishProgressBarSmooth(callback) {
+    if (progressTimer) clearInterval(progressTimer);
+    progressBarFinishing = true;
+    let current = parseFloat(progressBar.style.width) || 0;
+    let interval = setInterval(() => {
+        current += 2;
+        if (current >= 100) {
+            current = 100;
+            progressBar.style.width = '100%';
+            progressText.textContent = '分析完成';
+            clearInterval(interval);
+            if (callback) callback(); // 立即渲染分析结果
+            setTimeout(() => {
+                progressBarContainer.style.display = 'none';
+                progressText.style.display = 'none';
+                progressBarFinishing = false;
+            }, 1200);
+        } else {
+            progressBar.style.width = current + '%';
+        }
+    }, 20);
+}
+
+previewBtn.onclick = async function() {
+    if (!fileInput.files.length) return;
+    const previewFormData = new FormData();
+    for (let i = 0; i < fileInput.files.length; i++) {
+        previewFormData.append('file', fileInput.files[i]);
+    }
+    try {
+        const previewRes = await fetch('/api/preview', { method: 'POST', body: previewFormData });
+        const previewData = await previewRes.json();
+        if (previewData.imgs && previewData.imgs.length > 0) {
+            let idx = 0;
+            imageBox.style.display = '';
+            imageBox.innerHTML = `<img id="preview-img" src="${previewData.imgs[0]}" style="max-width:220px;max-height:220px;margin:10px auto;display:block;border-radius:6px;box-shadow:0 2px 8px #ccc;">
+                <input id="preview-slider" type="range" min="0" max="${previewData.imgs.length-1}" value="0" style="width:220px;margin-top:8px;">
+                <div id="preview-slice-info" style="text-align:center;color:#888;font-size:13px;margin-bottom:8px;">切片: 1 / ${previewData.imgs.length}</div>`;
+            const slider = document.getElementById('preview-slider');
+            const img = document.getElementById('preview-img');
+            const info = document.getElementById('preview-slice-info');
+            slider.oninput = function() {
+                img.src = previewData.imgs[slider.value];
+                info.textContent = `切片: ${parseInt(slider.value)+1} / ${previewData.imgs.length}`;
+            };
+            analyzeBtn.disabled = false;
+        } else {
+            imageBox.innerHTML = '灰度图像生成失败';
+            analyzeBtn.disabled = true;
+        }
+    } catch (e) {
+        imageBox.innerHTML = '灰度图像生成失败';
+        analyzeBtn.disabled = true;
+    }
+};
+
+uploadForm.onsubmit = async function(e) {
+    e.preventDefault();
+    await fetchProgressStats();
+    // 获取患者信息
+    const patientName = document.getElementById('patient-name').value.trim();
+    const patientGender = document.getElementById('patient-gender').value;
+    const patientAge = document.getElementById('patient-age').value.trim();
+    const patientId = document.getElementById('patient-id').value.trim();
+    if (!patientName || !patientGender || !patientAge) {
+        resultBox.textContent = '请填写完整的患者信息';
+        return;
+    }
+    if (!fileInput.files.length) return;
+    progressBarContainer.style.display = 'none';
+    progressText.style.display = 'none';
+    const formData = new FormData();
+    for (let i = 0; i < fileInput.files.length; i++) {
+        formData.append('file', fileInput.files[i]);
+    }
+    formData.append('patient_name', patientName);
+    formData.append('patient_gender', patientGender);
+    formData.append('patient_age', patientAge);
+    formData.append('patient_id', patientId);
+    try {
+        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+        const uploadData = await uploadRes.json();
+        if (uploadData.error) throw new Error(uploadData.error);
+        lastUploadPath = uploadData.path;
+        lastFileId = uploadData.file_id || uploadData.path || '';
+        startSmoothProgress();
+        const predictRes = await fetch('/api/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: lastUploadPath, file_id: lastFileId })
+        });
+        const predictData = await predictRes.json();
+        if (predictData.error) throw new Error(predictData.error);
+        finishProgressBarSmooth(() => {
+    const r = predictData.result;
+
+    // 计算各种状态的数量（与其他页面保持一致）
+    let benignNodules = 0;  // 结节数
+    let malignantTumors = 0;  // 恶性肿瘤数
+    let needFurtherDiagnosis = 0;  // 需进一步诊断数
+
+    if (r.nodule_results && r.nodule_results.length > 0) {
+        const noduleThreshold = r.nodule_summary?.threshold || 0.5;
+        const malignantThreshold = r.malignancy_summary?.threshold || 0.5;
+
+        const highProbNodules = r.nodule_results.filter(nodule =>
+            nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+        );
+
+        highProbNodules.forEach(nodule => {
+            if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                benignNodules++;
+            } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                malignantTumors++;
+            } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                needFurtherDiagnosis++;
+            }
+        });
+    }
+
+    // 修改分割结果显示
+    const segmentationText = (r.segmentation || '未知').replace(/检测到(\d+)个结节/, '检测到$1个疑似结节');
+
+    // 检测结果区
+    let html = `<br><b>分割结果：</b>${segmentationText}<br>`;
+    html += `<span style='color:#42a5f5;font-weight:bold;'>结节数：${benignNodules}</span><br>`;
+    html += `<span style='color:#ef5350;font-weight:bold;'>恶性肿瘤数：${malignantTumors}</span><br>`;
+    html += `<span style='color:#4caf50;font-weight:bold;'>需进一步诊断数：${needFurtherDiagnosis}</span><br>`;
+
+    document.getElementById('result-box').innerHTML = html;
+
+            // 添加详细结节数据展示
+            if (r.nodule_results && r.nodule_results.length > 0) {
+                const detailBox = document.createElement('div');
+                detailBox.style = 'margin-top:18px;padding:16px 18px;background:#f8f9fa;border-radius:10px;box-shadow:0 2px 8px #1976d122;';
+                detailBox.innerHTML = `
+                    <h4 style="color:#1976D2;margin-bottom:16px;">结节和恶性肿瘤详细数据</h4>
+                    <div style="max-height:300px;overflow-y:auto;position:relative;">
+                        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                            <thead style="position:sticky;top:0;z-index:10;background:#e3f2fd;">
+                                <tr>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">编号</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">结节概率</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">恶性概率</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">切片位置</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">体素坐标</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">物理坐标(mm)</th>
+                                    <th style="padding:8px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nodule-detail-table">
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                resultBox.appendChild(detailBox);
+
+                // 填充详细数据表格
+                const tableBody = document.getElementById('nodule-detail-table');
+                const noduleThreshold = r.nodule_summary?.threshold || 0.5;
+                const malignantThreshold = r.malignancy_summary?.threshold || 0.5;
+
+                // 只显示高概率结节和恶性肿瘤
+                const highProbNodules = r.nodule_results.filter(nodule =>
+                    nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+                );
+
+                highProbNodules.forEach((nodule, index) => {
+                    let status, statusColor, bgColor;
+
+                    // 修改状态判断逻辑（与历史记录页面一致）
+                    if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                        status = '结节';
+                        statusColor = '#42a5f5';
+                        bgColor = '#fff3e0';
+                    } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                        status = '恶性肿瘤';
+                        statusColor = '#ef5350';
+                        bgColor = '#ffebee';
+                    } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                        status = '需进一步诊断';
+                        statusColor = '#4caf50';
+                        bgColor = '#e8f5e8';
+                    } else {
+                        status = '未知';
+                        statusColor = '#757575';
+                        bgColor = '#f5f5f5';
+                    }
+
+                    const row = document.createElement('tr');
+                    row.style = `background:${bgColor};`;
+                    row.innerHTML = `
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;font-weight:bold;">${index + 1}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${(nodule.prob_nodule * 100).toFixed(1)}%</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${(nodule.prob_malignant * 100).toFixed(1)}%</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_irc ? nodule.center_irc[0] + 1 : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_irc ? `[${nodule.center_irc.join(', ')}]` : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;">${nodule.center_xyz ? `[${nodule.center_xyz.map(x => x.toFixed(1)).join(', ')}]` : '未知'}</td>
+                        <td style="padding:8px;border:1px solid #ddd;text-align:center;color:${statusColor};font-weight:bold;">${status}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            }
+
+            if (r.ai_diagnosis) {
+                const aiBox = document.createElement('div');
+                aiBox.style = 'margin-top:18px;padding:16px 18px;background:#f5f7fa;border-radius:10px;box-shadow:0 2px 8px #1976d122;';
+                aiBox.innerHTML = `<b style='color:#1976D2;'>AI诊断建议：</b><div id='ai-diagnosis-box'></div>`;
+                resultBox.appendChild(aiBox);
+                setTimeout(()=>{
+                    document.getElementById('ai-diagnosis-box').innerHTML = marked.parse(r.ai_diagnosis||'');
+                }, 0);
+            }
+            if (r.vis_mask_list && r.vis_mask_list.length > 0) {
+                let rels = r.vis_mask_list.map(p => p.replace(/^uploads[\\\/]/, ''));
+                imageBox.innerHTML = '';
+                const img = document.createElement('img');
+                img.src = '/vis/' + rels[0];
+                img.alt = '分割可视化';
+                img.style = 'display:block;max-width:220px;max-height:220px;margin:10px auto;border-radius:6px;box-shadow:0 2px 8px #ccc;';
+                imageBox.appendChild(img);
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = 0;
+                slider.max = rels.length - 1;
+                slider.value = 0;
+                slider.style = 'width:100%;margin-top:8px;';
+                imageBox.appendChild(slider);
+                const sliceInfo = document.createElement('div');
+                sliceInfo.style = 'text-align:center;color:#888;font-size:13px;margin-bottom:8px;';
+                sliceInfo.textContent = `切片: 1 / ${rels.length}`;
+                imageBox.appendChild(sliceInfo);
+                slider.oninput = function() {
+                    img.src = '/vis/' + rels[slider.value];
+                    sliceInfo.textContent = `切片: ${parseInt(slider.value)+1} / ${rels.length}`;
+                };
+            }
+        });
+    } catch (err) {
+        resultBox.textContent = '错误：' + err.message;
+    }
+};
+</script>
+{% endblock %}

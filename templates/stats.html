@@ -1,0 +1,464 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2 style="color:#1976D2;font-weight:bold;">数据统计与可视化</h2>
+<div class="mb-4" style="background:#F5F5F5;border-radius:8px;padding:24px 18px;">
+    <!-- 总体统计部分 -->
+    <div style="margin-bottom:32px;">
+        <h4 style="color:#1976D2;margin-bottom:20px;">总体统计</h4>
+        <div id="overall-charts" style="display:flex;flex-wrap:wrap;gap:32px;justify-content:space-between;">
+            <div style="flex:1;min-width:320px;max-width:420px;display:none;">
+                <h5 style="color:#1976D2;">良恶性分布</h5>
+                <div id="overall-malignancy-chart" style="height:320px;"></div>
+            </div>
+            <div style="flex:1;min-width:320px;max-width:420px;">
+                <h5 style="color:#1976D2;">病例数量趋势</h5>
+                <div id="overall-trend-chart" style="height:320px;"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 个人病例分析部分 -->
+    <div style="margin-bottom:18px;">
+        <h4 style="color:#1976D2;margin-bottom:20px;">个人病例分析</h4>
+        <label style="color:#1976D2;font-weight:500;">选择历史分析：</label>
+        <select id="case-select" style="min-width:220px;max-width:350px;padding:4px 10px;border-radius:6px;border:1.5px solid #e3f2fd;font-size:15px;margin-left:8px;"></select>
+    </div>
+    <div id="case-personal-row" style="display:flex;gap:40px;justify-content:center;align-items:flex-start;margin-bottom:24px;">
+  <div style="background:#fff;border-radius:12px;box-shadow:0 2px 12px #eee;padding:32px;min-width:420px;max-width:700px;">
+    <div id="case-detail"></div>
+  </div>
+  <div style="background:#fff;border-radius:12px;box-shadow:0 2px 12px #eee;padding:32px;min-width:520px;max-width:600px;">
+    <div id="case-malignancy-label-box" style="text-align:center;margin-bottom:18px;"></div>
+    <div id="nodule-malignancy-chart" style="height:30px;"></div>
+  </div>
+</div>
+    <div id="personal-info" style="background:#f8f9fa;border-radius:8px;padding:16px;overflow-y:auto;margin-bottom:0;"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script>
+let historyData = [];
+let currentCase = null;
+
+async function loadStats() {
+    const res = await fetch('/api/history/list');
+    const data = await res.json();
+    historyData = data.history || [];
+
+    // 填充下拉框
+    const select = document.getElementById('case-select');
+    select.innerHTML = historyData.length ? historyData.map(r => {
+        const p = r.patient_info || {};
+        let label = '';
+        if (p.name || p.patient_id) {
+            label = `${p.name||''} ${p.gender||''} ${p.age?('('+p.age+'岁)'):''} ${p.patient_id?('['+p.patient_id+']'):''}（${r.time}）`;
+        } else {
+            label = `${r.filename}（${r.time}）`;
+        }
+        return `<option value="${r.id}">${label}</option>`;
+    }).join('') : '<option>暂无历史分析</option>';
+
+    if (historyData.length) {
+        showCaseDetail(historyData[0].id);
+    } else {
+        document.getElementById('case-detail').innerHTML = '<div style="color:#888;">暂无历史分析</div>';
+        document.getElementById('personal-info').innerHTML = '<div style="color:#888;">暂无历史分析</div>';
+    }
+
+    select.onchange = function() {
+        showCaseDetail(this.value);
+    };
+
+    // 渲染总体统计图表
+    renderOverallCharts();
+}
+
+function getMalType(r) {
+    // 优先用后端主判字段
+    if (r.malignancy_label) return r.malignancy_label;
+    // 先看nodules
+    if (r.result && Array.isArray(r.result.nodules) && r.result.nodules.length > 0) {
+        let noduleList = r.result.nodules;
+        let malCount = 0;
+        let total = 0;
+        let maxProb = null, minProb = null, sumProb = 0;
+        noduleList.forEach(n => {
+            let prob = (typeof n.malignancy_prob === 'number') ? n.malignancy_prob : null;
+            if (prob !== null) {
+                total++;
+                sumProb += prob;
+                if (maxProb === null || prob > maxProb) maxProb = prob;
+                if (minProb === null || prob < minProb) minProb = prob;
+                if (prob >= 0.5) malCount++;
+            }
+        });
+        r._mal_stats = { malCount, total, maxProb, minProb, avgProb: total ? (sumProb/total) : null };
+        if (total === 0) return '未知';
+        if (malCount > 0) return '恶性';
+        return '良性';
+    }
+    // 兼容历史数据
+    if (r.result && typeof r.result.malignancy_prob === 'number') {
+        return r.result.malignancy_prob >= 0.5 ? '恶性' : '良性';
+    }
+    if (typeof r.malignancy_prob === 'number') {
+        return r.malignancy_prob >= 0.5 ? '恶性' : '良性';
+    }
+    if (r.result && r.result.malignancy) {
+        if (r.result.malignancy.includes('恶性')) return '恶性';
+        if (r.result.malignancy.includes('良性')) return '良性';
+    }
+    if (r.malignancy) {
+        if (r.malignancy.includes('恶性')) return '恶性';
+        if (r.malignancy.includes('良性')) return '良性';
+    }
+    return '未知';
+}
+
+function getMalPieData(countObj) {
+    // 顺序：恶性、良性、未知
+    return [
+        { name: '恶性', value: countObj['恶性'] || 0 },
+        { name: '良性', value: countObj['良性'] || 0 },
+        { name: '未知', value: countObj['未知'] || 0 }
+    ];
+}
+
+function renderOverallCharts() {
+    // 总体良恶性分布
+    let malCount = { '良性': 0, '恶性': 0, '未知': 0 };
+    let trend = {};
+    
+    historyData.forEach(r => {
+        let mal = getMalType(r);
+        malCount[mal] = (malCount[mal] || 0) + 1;
+        let date = (r.time || '').split(' ')[0];
+        if (date) trend[date] = (trend[date] || 0) + 1;
+    });
+    
+    let malData = getMalPieData(malCount);
+    let overallMalChart = echarts.init(document.getElementById('overall-malignancy-chart'));
+    overallMalChart.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { top: 'bottom' },
+        series: [{
+            name: '良恶性分布', type: 'pie', radius: '60%', data: malData,
+            label: { formatter: '{b}: {c} ({d}%)' }
+        }]
+    });
+    
+    // 病例数量趋势
+    let trendArr = Object.entries(trend).sort((a,b)=>a[0].localeCompare(b[0]));
+    let overallTrendChart = echarts.init(document.getElementById('overall-trend-chart'));
+    overallTrendChart.setOption({
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: trendArr.map(t=>t[0]) },
+        yAxis: { type: 'value' },
+        series: [{ name: '病例数', type: 'line', data: trendArr.map(t=>t[1]) }]
+    });
+}
+
+function renderPersonalCharts(caseData) {
+    const r = caseData;
+    // 结节预测分布
+    let noduleResults = (r.result && Array.isArray(r.result.nodule_results)) ? r.result.nodule_results : [];
+    let noduleSummary = (r.result && r.result.nodule_summary) || {};
+    let malignancySummary = (r.result && r.result.malignancy_summary) || {};
+    
+    // 计算各种状态的数量（与历史记录页面保持一致）
+    let benignNodules = 0;  // 结节数（结节概率≥50%且恶性概率<50%）
+    let malignantTumors = 0;  // 恶性肿瘤数（结节概率≥50%且恶性概率≥50%）
+    let needFurtherDiagnosis = 0;  // 需进一步诊断数（结节概率<50%且恶性概率≥50%）
+    
+    const noduleThreshold = noduleSummary.threshold || 0.5;
+    const malignantThreshold = malignancySummary.threshold || 0.5;
+    
+    const highProbNodules = noduleResults.filter(nodule => 
+        nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+    );
+    
+    highProbNodules.forEach(nodule => {
+        if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+            benignNodules++;
+        } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+            malignantTumors++;
+        } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+            needFurtherDiagnosis++;
+        }
+    });
+    
+    // 结节预测分布统计（修改为阳性/阴性）
+    let noduleCount = { '阳性': 0, '阴性': 0 };
+    noduleResults.forEach(n => {
+        if (typeof n.prob_nodule === 'number') {
+            if (n.prob_nodule >= (noduleSummary.threshold || 0.5)) noduleCount['阳性']++;
+            else noduleCount['阴性']++;
+        }
+    });
+    let nodulePieData = [
+        { name: '阳性', value: noduleCount['阳性'] },
+        { name: '阴性', value: noduleCount['阴性'] }
+    ];
+    
+    // 肿瘤预测分布统计
+    let tumorCount = { '恶性肿瘤': 0, '良性肿瘤': 0 };
+    noduleResults.forEach(n => {
+        if (typeof n.prob_malignant === 'number') {
+            if (n.prob_malignant >= (malignancySummary.threshold || 0.5)) tumorCount['恶性肿瘤']++;
+            else tumorCount['良性肿瘤']++;
+        }
+    });
+    let tumorPieData = [
+        { name: '恶性肿瘤', value: tumorCount['恶性肿瘤'] },
+        { name: '良性肿瘤', value: tumorCount['良性肿瘤'] }
+    ];
+    
+    // 渲染结节预测分布饼图
+    let noduleChartId = 'nodule-prediction-chart';
+    let noduleChartBox = document.getElementById(noduleChartId);
+    if (!noduleChartBox) {
+        let box = document.createElement('div');
+        box.id = noduleChartId;
+        box.style.height = '220px';
+        box.style.marginTop = '10px';
+        document.querySelector('#case-personal-row > div:last-child').appendChild(box);
+    }
+    let nodulePieChart = echarts.init(document.getElementById(noduleChartId));
+    nodulePieChart.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { top: 'bottom' },
+        title: { text: '结节预测分布', left: 'center', top: 0, textStyle: { fontSize: 15, color: '#1976D2', fontWeight: 'bold' } },
+        series: [{
+            name: '结节预测', type: 'pie', radius: '60%', data: nodulePieData,
+            label: { formatter: '{b}: {c} ({d}%)' },
+            color: ['#ff7f50', '#87ceeb']  // 阳性橙红色，阴性浅蓝色
+        }]
+    });
+    
+    // 渲染肿瘤预测分布饼图
+    let tumorChartId = 'tumor-prediction-chart';
+    let tumorChartBox = document.getElementById(tumorChartId);
+    if (!tumorChartBox) {
+        let box = document.createElement('div');
+        box.id = tumorChartId;
+        box.style.height = '220px';
+        box.style.marginTop = '10px';
+        document.querySelector('#case-personal-row > div:last-child').appendChild(box);
+    }
+    let tumorPieChart = echarts.init(document.getElementById(tumorChartId));
+    tumorPieChart.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { top: 'bottom' },
+        title: { text: '肿瘤预测分布', left: 'center', top: 0, textStyle: { fontSize: 15, color: '#1976D2', fontWeight: 'bold' } },
+        series: [{
+            name: '肿瘤预测', type: 'pie', radius: '60%', data: tumorPieData,
+            label: { formatter: '{b}: {c} ({d}%)' }
+        }]
+    });
+    
+    // 诊断结果标签（与历史记录页面逻辑对应）
+    let labelBox = document.getElementById('case-malignancy-label-box');
+    if (!labelBox) {
+        labelBox = document.createElement('div');
+        labelBox.id = 'case-malignancy-label-box';
+        labelBox.style.textAlign = 'center';
+        labelBox.style.marginBottom = '18px';
+        document.querySelector('#case-personal-row > div:last-child').prepend(labelBox);
+    }
+    let mainDiagnosis = '未知';
+    if (malignantTumors > 0) mainDiagnosis = '有恶性肿瘤';
+    else if (benignNodules > 0) mainDiagnosis = '有结节';
+    else if (needFurtherDiagnosis > 0) mainDiagnosis = '需进一步诊断';
+    
+    let color = '#bdbdbd';
+    if (mainDiagnosis === '有结节') color = '#42a5f5';
+    if (mainDiagnosis === '有恶性肿瘤') color = '#ef5350';
+    if (mainDiagnosis === '需进一步诊断') color = '#4caf50';
+    labelBox.innerHTML = `<span style="font-size:1.2rem;color:#666;margin-right:8px;">诊断结果：</span><span style="font-size:2.2rem;font-weight:bold;color:${color};">${mainDiagnosis}</span>`;
+    
+    // 详细信息
+    const p = r.patient_info || {};
+    let infoHtml = `
+        <div style="margin-bottom:12px;">
+            <strong style="color:#1976D2;">基本信息：</strong><br>
+            姓名：${p.name || '未填写'}<br>
+            性别：${p.gender || '未填写'}<br>
+            年龄：${p.age || '未填写'}岁<br>
+            住院号：${p.patient_id || '未填写'}
+        </div>
+        <div style="margin-bottom:12px;">
+            <strong style="color:#1976D2;">结节预测统计：</strong><br>
+            总结节数：${noduleSummary.total || 0}<br>
+            结节数：${benignNodules}<br>
+            最大结节概率：${noduleSummary.max_prob_nodule !== undefined ? (noduleSummary.max_prob_nodule*100).toFixed(1)+'%' : '未知'}<br>
+            最小结节概率：${noduleSummary.min_prob_nodule !== undefined ? (noduleSummary.min_prob_nodule*100).toFixed(1)+'%' : '未知'}<br>
+            平均结节概率：${noduleSummary.avg_prob_nodule !== undefined ? (noduleSummary.avg_prob_nodule*100).toFixed(1)+'%' : '未知'}
+        </div>
+        <div style="margin-bottom:12px;">
+            <strong style="color:#1976D2;">肿瘤预测统计：</strong><br>
+            恶性肿瘤数：${malignantTumors}<br>
+            需进一步诊断数：${needFurtherDiagnosis}<br>
+            最大恶性概率：${malignancySummary.max_prob_malignant !== undefined ? (malignancySummary.max_prob_malignant*100).toFixed(1)+'%' : '未知'}<br>
+            最小恶性概率：${malignancySummary.min_prob_malignant !== undefined ? (malignancySummary.min_prob_malignant*100).toFixed(1)+'%' : '未知'}<br>
+            平均恶性概率：${malignancySummary.avg_prob_malignant !== undefined ? (malignancySummary.avg_prob_malignant*100).toFixed(1)+'%' : '未知'}
+        </div>
+    `;
+    
+    // 添加详细结节数据展示
+    if (noduleResults && noduleResults.length > 0) {
+        infoHtml += `
+            <div style="margin-bottom:12px;">
+                <strong style="color:#1976D2;">结节和恶性肿瘤详细数据：</strong><br>
+                <div style="max-height:200px;overflow-y:auto;position:relative;margin-top:8px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                        <thead style="position:sticky;top:0;z-index:10;background:#e3f2fd;">
+                            <tr>
+                                <th style="padding:4px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">编号</th>
+                                <th style="padding:4px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">结节概率</th>
+                                <th style="padding:4px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">恶性概率</th>
+                                <th style="padding:4px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">切片位置</th>
+                                <th style="padding:4px;border:1px solid #ddd;text-align:center;background:#e3f2fd;">状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stats-nodule-detail-table">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (r.result.ai_diagnosis) {
+        infoHtml += `
+            <div style="margin-bottom:12px;">
+                <strong style="color:#1976D2;">AI诊断建议：</strong><br>
+                <div style="background:#f0f8ff;padding:8px;border-radius:4px;font-size:14px;">
+                    ${r.result.ai_diagnosis}
+                </div>
+            </div>
+        `;
+    }
+    document.getElementById('personal-info').innerHTML = infoHtml;
+    
+    // 填充详细结节数据表格（与历史记录页面逻辑一致）
+    if (noduleResults && noduleResults.length > 0) {
+        const tableBody = document.getElementById('stats-nodule-detail-table');
+        if (tableBody) {
+            highProbNodules.forEach((nodule, index) => {
+                let status, statusColor, bgColor;
+                
+                if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                    status = '结节';
+                    statusColor = '#42a5f5';
+                    bgColor = '#fff3e0';
+                } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                    status = '恶性肿瘤';
+                    statusColor = '#ef5350';
+                    bgColor = '#ffebee';
+                } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                    status = '需进一步诊断';
+                    statusColor = '#4caf50';
+                    bgColor = '#e8f5e8';
+                } else {
+                    status = '未知';
+                    statusColor = '#757575';
+                    bgColor = '#f5f5f5';
+                }
+                
+                const row = document.createElement('tr');
+                row.style = `background:${bgColor};`;
+                row.innerHTML = `
+                    <td style="padding:4px;border:1px solid #ddd;text-align:center;font-weight:bold;">${index + 1}</td>
+                    <td style="padding:4px;border:1px solid #ddd;text-align:center;">${(nodule.prob_nodule * 100).toFixed(1)}%</td>
+                    <td style="padding:4px;border:1px solid #ddd;text-align:center;">${(nodule.prob_malignant * 100).toFixed(1)}%</td>
+                    <td style="padding:4px;border:1px solid #ddd;text-align:center;">${nodule.center_irc ? nodule.center_irc[0] + 1 : '未知'}</td>
+                    <td style="padding:4px;border:1px solid #ddd;text-align:center;color:${statusColor};font-weight:bold;">${status}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+    }
+}
+
+async function showCaseDetail(id) {
+    const res = await fetch('/api/history/detail?id=' + id);
+    const data = await res.json();
+    if (data.error) {
+        document.getElementById('case-detail').innerHTML = '<span style="color:red;">' + data.error + '</span>';
+        return;
+    }
+    
+    currentCase = data.record;
+    let rels = [];
+    
+    // 计算各种状态的数量（与历史记录页面保持一致）
+    let noduleResults = (currentCase.result && Array.isArray(currentCase.result.nodule_results)) ? currentCase.result.nodule_results : [];
+    let noduleSummary = (currentCase.result && currentCase.result.nodule_summary) || {};
+    let malignancySummary = (currentCase.result && currentCase.result.malignancy_summary) || {};
+    
+    let benignNodules = 0;  // 结节数
+    let malignantTumors = 0;  // 恶性肿瘤数
+    let needFurtherDiagnosis = 0;  // 需进一步诊断数
+    let totalNodules = noduleSummary.total || 0;
+    
+    if (noduleResults && noduleResults.length > 0) {
+        const noduleThreshold = noduleSummary.threshold || 0.5;
+        const malignantThreshold = malignancySummary.threshold || 0.5;
+        
+        const highProbNodules = noduleResults.filter(nodule => 
+            nodule.prob_nodule >= noduleThreshold || nodule.prob_malignant >= malignantThreshold
+        );
+        
+        highProbNodules.forEach(nodule => {
+            if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant < 0.5) {
+                benignNodules++;
+            } else if (nodule.prob_nodule >= 0.5 && nodule.prob_malignant >= 0.5) {
+                malignantTumors++;
+            } else if (nodule.prob_nodule < 0.5 && nodule.prob_malignant >= 0.5) {
+                needFurtherDiagnosis++;
+            }
+        });
+    }
+    
+    // 统计展示HTML调整顺序
+    let statsHtml = `<div style="margin-bottom:10px;font-size:1.1rem;line-height:1.7;">
+        <b>分析时间：</b>${currentCase.time}<br>
+        <b>文件名：</b>${currentCase.filename}<br>
+        <b>分割结果：</b>检测到${totalNodules}个疑似结节<br>
+        <span style='color:#42a5f5;font-weight:bold;'>结节数：${benignNodules}</span><br>
+        <span style='color:#ef5350;font-weight:bold;'>恶性肿瘤数：${malignantTumors}</span><br>
+        <span style='color:#4caf50;font-weight:bold;'>需进一步诊断数：${needFurtherDiagnosis}</span>
+    </div>`;
+    let html = statsHtml;
+    
+    // 图片和滑块部分保持不变
+    if (currentCase.result.vis_mask_list && currentCase.result.vis_mask_list.length > 0) {
+        rels = currentCase.result.vis_mask_list.map(p => p.replace(/^uploads[\\\/]/, ''));
+        html += '<div style="margin-top:12px;display:flex;flex-direction:column;align-items:flex-start;">'
+        html += `<img id="case-img" src="/vis/${rels[0]}" style="max-width:320px;width:100%;border-radius:6px;box-shadow:0 2px 8px #ccc;">`
+        if (rels.length > 1) { html += `<input id="case-slider" type="range" min="0" max="${rels.length-1}" value="0" style="width:320px;display:block;margin-top:8px;">
+        <div id="case-slice-info" style="width:320px;color:#888;font-size:13px;margin-bottom:8px;margin-top:4px;text-align:center;">切片: 1 / ${rels.length}</div>`; }
+        html += '</div>';
+    }
+    
+    document.getElementById('case-detail').innerHTML = html;
+    
+    // 渲染个人图表
+    renderPersonalCharts(currentCase);
+    
+    // 滑动条切换
+    const slider = document.getElementById('case-slider');
+    const img = document.getElementById('case-img');
+    const info = document.getElementById('case-slice-info');
+    if (slider && img && info) {
+        slider.oninput = function() {
+            img.src = '/vis/' + rels[slider.value];
+            info.textContent = `切片: ${parseInt(slider.value)+1} / ${rels.length}`;
+        };
+    }
+}
+
+loadStats();
+</script>
+{% endblock %}
